@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  - push
+  - pull_request
+
+env:
+  BUILDROOT_NC4_PATH: "${{ github.workspace }}/arm-webos-linux-gnueabi_sdk-buildroot.tar.gz"
+  BUILDROOT_NC4_URL: "https://github.com/openlgtv/buildroot-nc4/releases/download/webos-d7ed7ee/arm-webos-linux-gnueabi_sdk-buildroot.tar.gz"
+  KODI_PATH: "${{ github.workspace }}/kodi"
+  KODI_DEPS_PATH: "${{ github.workspace }}/kodi-deps"
+  KODI_DEV_PATH: "${{ github.workspace }}/kodi-dev"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  CI:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          path: kodi
+
+      - name: Create directories
+        run: |
+          mkdir -p ${{ env.KODI_DEPS_PATH }}
+          mkdir -p ${{ env.KODI_DEV_PATH }}
+
+      - name: Download buildroot-nc4
+        run: |
+          wget --output-document=${{ env.BUILDROOT_NC4_PATH }} ${{ env.BUILDROOT_NC4_URL }}
+
+      - name: Set up buildroot-nc4
+        run: |
+          tar -zxf ${{ env.BUILDROOT_NC4_PATH }} -C ${{ env.KODI_DEV_PATH }}
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get install \
+            autoconf build-essential cmake \
+            gcc-aarch64-linux-gnu \
+            curl libssl-dev libcurl4-openssl-dev \
+            default-jre npm \
+            bison comerr-dev flex gnutls-dev heimdal-multidev \
+            libacl1-dev libarchive-dev libdbus-1-dev libgpgme-dev \
+            libjansson-dev libldap2-dev liblmdb-dev libparse-yapp-perl
+
+      - name: Set up python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Upgrade python-pip
+        run: |
+          python -m pip install --upgrade pip
+          pip --version
+
+      - name: Install python-pip dependencies
+        run: |
+          pip install markdown
+
+      - name: Install node dependencies
+        run: |
+          npm install -g @webos-tools/cli
+
+      - name: Tools bootstrap
+        run: |
+          cd ${{ env.KODI_PATH }}/tools/depends && ./bootstrap
+
+      - name: Tools configure
+        run: |
+          cd ${{ env.KODI_PATH }}/tools/depends && ./configure \
+              --prefix=${{ env.KODI_DEPS_PATH }} \
+              --host=arm-webos-linux-gnueabi \
+              --with-toolchain=${{ env.KODI_DEV_PATH }}/arm-webos-linux-gnueabi_sdk-buildroot \
+              --enable-debug=no
+
+      - name: Tools build
+        run: |
+          make -C ${{ env.KODI_PATH }}/tools/depends -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: webOS project
+        run: |
+          make -C ${{ env.KODI_PATH }}/tools/depends/target/cmakebuildsys
+
+      - name: webOS build
+        run: |
+          make -C ${{ env.KODI_PATH }}/build -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: webOS ipk
+        run: |
+          make -C ${{ env.KODI_PATH }}/build ipk
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodi-webOS-${{ github.sha }}.ipk
+          path: ${{ env.KODI_PATH }}/build/org.xbmc.kodi_*.ipk
+          retention-days: 5
